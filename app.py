@@ -79,9 +79,14 @@ def main() -> None:
         "5. Đánh giá mô hình trên tập test bằng MSE, MAE và R²."
     )
 
-    train_df, test_df = split_train_test(df, test_ratio=0.2)
-    model, baseline = build_linear_model(train_df)
-    eval_metrics = evaluate_model(model, baseline, test_df)
+    try:
+        train_df, test_df = split_train_test(df, test_ratio=0.2)
+        model_eval = build_linear_model(train_df)
+        eval_metrics = evaluate_model(model_eval, test_df)
+        final_model = build_linear_model(df)
+    except Exception as exc:
+        st.error(f"Lỗi khi tách hoặc huấn luyện mô hình: {exc}")
+        return
 
     st.markdown(
         f"- Tập train: **{len(train_df)}** dòng, từ {train_df['NGÀY'].min().date()} đến {train_df['NGÀY'].max().date()}  \n"
@@ -95,18 +100,27 @@ def main() -> None:
     )
     st.markdown(
         "Đây là cách cơ bản để đánh giá mô hình trên dữ liệu chưa từng thấy trước đó. "
-        "Mô hình này dùng xu hướng tuyến tính của giá đóng cửa theo ngày giao dịch."
+        "Mô hình được huấn luyện trên train và đánh giá trên test để tránh rò rỉ dữ liệu."
     )
 
-    st.subheader("Dự báo giá đóng cửa")
-    forecast_year = st.selectbox("Chọn năm dự báo", [2023, 2024, 2025, 2026], index=3)
-    forecast_date = pd.Timestamp(f"{forecast_year}-12-31")
-    prediction = forecast_close(df, forecast_date)
+    st.subheader("Dự báo giá đóng cửa tương lai")
+    max_date = df["NGÀY"].max().date()
+    forecast_date = st.date_input(
+        "Chọn ngày muốn dự báo trong tương lai:",
+        value=max_date + pd.Timedelta(days=30),
+        min_value=max_date + pd.Timedelta(days=1),
+    )
+
+    try:
+        prediction_price = forecast_close(final_model, pd.Timestamp(forecast_date))
+    except Exception as exc:
+        st.error(f"Lỗi khi dự báo giá tương lai: {exc}")
+        return
 
     st.markdown(
-        f"- Ngày dự báo: **{prediction['target_date'].date()}**  \n"
-        f"- Giá đóng cửa dự báo: **{prediction['predicted_close']:,.0f} VND**  \n"
-        f"- Độ chính xác mô hình (R²): **{prediction['r2_score']}**"
+        f"- Ngày dự báo: **{forecast_date}**  \n"
+        f"- Giá đóng cửa dự báo: **{prediction_price:,.0f} VND**  \n"
+        f"- Độ chính xác trên tập kiểm tra (R²): **{eval_metrics['r2']:.4f}**"
     )
 
     st.markdown(

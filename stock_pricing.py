@@ -71,14 +71,23 @@ def split_train_test(df: pd.DataFrame, test_ratio: float = 0.2) -> tuple[pd.Data
     if not 0 < test_ratio < 1:
         raise ValueError("test_ratio phải nằm trong khoảng 0 < test_ratio < 1")
     df = df.sort_values("NGÀY").reset_index(drop=True)
-    split_index = int(len(df) * (1 - test_ratio))
+    n = len(df)
+    if n < 2:
+        raise ValueError("Dữ liệu phải có ít nhất 2 dòng để tách tập train và test.")
+    split_index = int(n * (1 - test_ratio))
+    if split_index < 1:
+        split_index = 1
+    elif split_index >= n:
+        split_index = n - 1
     train_df = df.iloc[:split_index].reset_index(drop=True)
     test_df = df.iloc[split_index:].reset_index(drop=True)
     return train_df, test_df
 
 
-def build_linear_model(df: pd.DataFrame) -> tuple[LinearRegression, pd.Timestamp]:
-    """Build a linear regression model for closing price over time."""
+def build_linear_model(df: pd.DataFrame) -> LinearRegression:
+    """Huấn luyện mô hình hồi quy tuyến tính và lưu baseline trực tiếp vào model."""
+    if len(df) < 2:
+        raise ValueError("Tập train phải có ít nhất 2 dòng để huấn luyện mô hình.")
     model = LinearRegression()
     baseline = df["NGÀY"].min()
     df = df.copy()
@@ -86,11 +95,33 @@ def build_linear_model(df: pd.DataFrame) -> tuple[LinearRegression, pd.Timestamp
     X = df[["daynum"]].values
     y = df["GIÁ ĐÓNG CỬA"].values
     model.fit(X, y)
-    return model, baseline
+    model.baseline_ = baseline
+    return model
 
 
-def evaluate_model(model: LinearRegression, baseline: pd.Timestamp, test_df: pd.DataFrame) -> dict[str, float]:
-    """Evaluate a trained model on a test set."""
+def evaluate_model(model: LinearRegression, *args) -> dict[str, float]:
+    """Đánh giá mô hình trên tập kiểm tra độc lập.
+
+    Hỗ trợ cả hai cách gọi:
+    - evaluate_model(model, test_df)
+    - evaluate_model(model, baseline, test_df)
+    """
+    if len(args) == 1:
+        baseline = None
+        test_df = args[0]
+    elif len(args) == 2:
+        baseline, test_df = args
+    else:
+        raise TypeError("evaluate_model() expects model and test_df, hoặc model, baseline, test_df")
+
+    if not hasattr(model, "baseline_") and baseline is None:
+        raise ValueError("Mô hình không hợp lệ hoặc thiếu baseline_.")
+    if baseline is None:
+        baseline = model.baseline_
+
+    if len(test_df) == 0:
+        raise ValueError("Tập test cần có ít nhất 1 dòng dữ liệu để đánh giá.")
+
     test_df = test_df.copy()
     test_df["daynum"] = (test_df["NGÀY"] - baseline).dt.days
     X_test = test_df[["daynum"]].values
@@ -100,34 +131,20 @@ def evaluate_model(model: LinearRegression, baseline: pd.Timestamp, test_df: pd.
         "mse": float(mean_squared_error(y_true, y_pred)),
         "mae": float(mean_absolute_error(y_true, y_pred)),
         "r2": float(r2_score(y_true, y_pred)),
-        "test_start": test_df["NGÀY"].min(),
-        "test_end": test_df["NGÀY"].max(),
-        "n_test": len(test_df),
     }
 
 
-def forecast_close(df: pd.DataFrame, target_date: Any) -> dict[str, float]:
-    """Forecast the closing price for a target date using a linear trend."""
-    if isinstance(target_date, str):
-        target_date = pd.to_datetime(target_date, errors="coerce")
-    elif isinstance(target_date, pd.Timestamp):
-        target_date = target_date
-    else:
-        target_date = pd.to_datetime(target_date)
+def forecast_close(model: LinearRegression, target_date: Any) -> float:
+    """Dự báo giá đóng cửa dựa trên đối tượng mô hình đã được huấn luyện đầy đủ."""
+    target_date = pd.to_datetime(target_date, errors="coerce")
     if pd.isna(target_date):
         raise ValueError("Ngày dự báo không hợp lệ.")
-    baseline = df["NGÀY"].min()
-    model, baseline = build_linear_model(df)
+    if not hasattr(model, "baseline_"):
+        raise ValueError("Mô hình không hợp lệ hoặc thiếu thông tin ngày gốc (baseline_).")
+    baseline = model.baseline_
     daynum = int((target_date - baseline).days)
     predicted = float(model.predict([[daynum]])[0])
-    r2 = float(model.score((df["NGÀY"] - baseline).dt.days.to_numpy().reshape(-1, 1), df["GIÁ ĐÓNG CỬA"].to_numpy()))
-    return {
-        "target_date": target_date,
-        "predicted_close": round(predicted, 2),
-        "trend_slope": float(model.coef_[0]),
-        "trend_intercept": float(model.intercept_),
-        "r2_score": round(r2, 4),
-    }
+    return round(predicted, 2)
 
 
 def get_default_file_path() -> Path:
